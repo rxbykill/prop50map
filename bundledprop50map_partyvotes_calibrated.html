@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>CA — Tracts (votes) + Prop 50 vs 2020 — single label per district</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+  <style>
+    html,body{height:100%;margin:0}
+    #map{position:absolute;inset:0}
+    .toggle{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
+      background:rgba(255,255,255,.92);padding:8px 10px;border-radius:10px;
+      font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      box-shadow:0 2px 8px rgba(0,0,0,.15);z-index:3;display:flex;gap:8px}
+    .btn{appearance:none;border:1px solid #ccc;background:#fff;padding:6px 10px;
+      border-radius:10px;cursor:pointer;font:14px/1.2 inherit;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+    .btn:hover{background:#f6f6f6}
+    .legend-box{position:absolute;z-index:3;bottom:12px;left:12px;
+      background:rgba(255,255,255,.92);border-radius:10px;padding:10px 12px;
+      box-shadow:0 2px 8px rgba(0,0,0,.15);
+      font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;min-width:260px}
+    .legend-title{font-weight:600;margin-bottom:6px}
+    .legend-row{display:flex;align-items:center;gap:8px;margin:4px 0}
+    .legend-note{font-size:12px;color:#555;margin-top:4px}
+    .grad{height:14px;border-radius:4px}
+    .grad-diverging{width:220px;background:linear-gradient(to right,
+      #a50f15 0%, #de2d26 20%, #fb6a4a 40%, #ffffff 50%, #deebf7 60%, #9ecae1 80%, #08519c 100%);
+      border:1px solid rgba(0,0,0,.1)}
+    .legend-dim{opacity:.35}
+    .legend-spread{justify-content:space-between;width:220px;font-size:12px;color:#333}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="toggle">
+    <button id="btn-toggle" class="btn" type="button">Switch to 2020</button>
+  </div>
+
+  <div class="legend-box">
+    <div class="legend-title">Leading‑Party Vote Density by Precinct in 2024</div>
+    <div class="legend-row"><div class="grad grad-diverging"></div></div>
+    <div class="legend-row legend-spread"><span>Republican</span><span></span><span>Democrat</span></div>
+    <div class="legend-note">Precincts darken by the number of votes for the leading party in each precinct. </div>
+    <hr>
+    <div class="legend-title">District Borders</div>
+    <div class="legend-row" id="legend-ab604"><span style="color:#ff8103;font-weight:bold;">━</span> Prop 50 Districts</div>
+    <div class="legend-row legend-dim" id="legend-2020"><span style="color:#ff8103;font-weight:bold;">━</span> 2020 Districts</div>
+  </div>
+
+  <script>
+    // ---- CONFIG ----
+    mapboxgl.accessToken = 'pk.eyJ1IjoicnV0aG5maW5jaCIsImEiOiJjbWgybDA2aG8ydnFpMm5uYWVqMWZ3bW5kIn0.zQCyDxihQ-jyA36Wiy-TRw';
+    const PROP50_TILESET_URL = 'mapbox://ruthnfinch.63ohl3tk';
+    const Y2020_TILESET_URL  = 'mapbox://ruthnfinch.2jy7hxhc';
+    const TRACTS_TILESET_URL = 'mapbox://ruthnfinch.bcdd0f0k';
+
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/light-v10',
+      center: [-119.5, 37.1],
+      zoom: 5
+    });
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+    function firstSymbolLayerId(){ const layers=map.getStyle().layers||[]; const sym=layers.find(l=>l.type==='symbol'); return sym? sym.id: undefined; }
+    function tilesetIdFromUrl(u){ const m=u&&u.match(/mapbox:\/\/([^/]+)$/); return m? m[1]: null; }
+    async function getFirstSourceLayerId(tilesetUrl){
+      const id=tilesetIdFromUrl(tilesetUrl);
+      const tj=await fetch(`https://api.mapbox.com/v4/${id}.json?secure&access_token=${mapboxgl.accessToken}`).then(r=>r.json());
+      const vl=(tj&&tj.vector_layers)||[]; if(!vl.length) throw new Error('No vector_layers for '+tilesetUrl);
+      return vl[0].id;
+    }
+
+    // ---- Expressions / filters (tracts winner + intensity) ----
+    const dem=['coalesce',['to-number',['get','dem_calc']],['to-number',['get','dem_vote']],['to-number',['get','votes_dem']],0];
+    const rep=['coalesce',['to-number',['get','rep_calc']],['to-number',['get','rep_vote']],['to-number',['get','votes_rep']],0];
+    const total=['coalesce',['to-number',['get','votes_total']],['+',dem,rep],0];
+    const pctLead=['to-number',['get','pct_dem_lead']];
+
+    const BLUE_RAMP=['interpolate',['exponential',1.4],total,0,'#ffffff',75,'#deebf7',300,'#9ecae1',1200,'#6baed6',3000,'#3182bd',12000,'#08519c'];
+    const RED_RAMP =['interpolate',['exponential',1.4],total,0,'#ffffff',75,'#fee5d9',300,'#fcae91',1200,'#fb6a4a',3000,'#de2d26',12000,'#a50f15'];
+
+    const FILL_COLOR_EXPR=[
+      'case',
+        ['==', total, 0], '#ffffff',
+        ['has','pct_dem_lead'],
+          ['case', ['==', pctLead, 0], '#ffffff', ['<', pctLead, 0], RED_RAMP, BLUE_RAMP ],
+        ['==', dem, rep], '#ffffff',
+        ['>',  rep, dem], RED_RAMP,
+        BLUE_RAMP
+    ];
+
+    // Separate tracts vs districts
+    const HAS_VOTE_FIELDS = ['any', ['has','votes_total'], ['has','votes_dem'], ['has','votes_rep']];
+    const HAS_DIST_FIELDS = ['any', ['has','DISTRICT_N'], ['has','DISTRICT'], ['has','GEOID'], ['has','NAME']];
+    const FILTER_TRACTS = HAS_VOTE_FIELDS;
+    const FILTER_DISTRICTS_STRICT = ['all', HAS_DIST_FIELDS, ['!', HAS_VOTE_FIELDS]];
+
+    // Label text
+    const DIST_TEXT=['to-string',['coalesce',['get','DISTRICT_N'],['to-number',['get','DISTRICT']]]];
+
+    // Bookkeeping for feature-state labels (one per district)
+    const labelState = {
+      prop50: new Map(), // district -> {sourceLayer,id}
+      y2020:  new Map()
+    };
+    const prevLabeled = {
+      prop50: new Set(), // `${sourceLayer}|${id}`
+      y2020:  new Set()
+    };
+
+    function keyFor(sourceLayer, id){ return `${sourceLayer}|${id}`; }
+
+    // Choose exactly one rendered feature per district (largest area if available), then set feature-state {label:true}
+    function dedupeLabelsFor(source, sourceLayer, lineLayerId, districtMapKey){
+      // Get currently rendered district features from the border line layer
+      const feats = map.queryRenderedFeatures({ layers: [lineLayerId] })
+        .filter(f => f.source === source && f.sourceLayer === sourceLayer);
+
+      if (!feats.length) return;
+
+      // Group by DISTRICT_N (fallback: DISTRICT as number/string)
+      const byDist = new Map();
+      for (const f of feats){
+        const p = f.properties || {};
+        const dist = (p.DISTRICT_N != null ? p.DISTRICT_N : (p.DISTRICT != null ? p.DISTRICT : null));
+        if (dist == null) continue;
+        // Ensure we have an id to use feature-state; otherwise we can't dedupe
+        if (typeof f.id === 'undefined' || f.id === null){
+          // Warn only once
+          if (!window.__warnedNoId){ console.warn('Some features have no feature id; single-label dedupe may be limited.'); window.__warnedNoId = true; }
+          continue;
+        }
+        if (!byDist.has(dist)) byDist.set(dist, []);
+        byDist.get(dist).push(f);
+      }
+
+      const chosen = new Map(); // dist -> feature
+      for (const [dist, list] of byDist.entries()){
+        // Prefer the one with the largest Shape__Area if present; else first
+        let best = list[0];
+        let bestArea = Number(best.properties && best.properties.Shape__Area) || -Infinity;
+        for (let i=1;i<list.length;i++){
+          const a = Number(list[i].properties && list[i].properties.Shape__Area);
+          if (Number.isFinite(a) && a > bestArea){
+            best = list[i]; bestArea = a;
+          }
+        }
+        chosen.set(dist, best);
+      }
+
+      // Clear previous states that are no longer chosen
+      for (const key of prevLabeled[districtMapKey]){
+        const [sl,idStr] = key.split('|');
+        const id = isNaN(+idStr) ? idStr : +idStr;
+        map.setFeatureState({ source, sourceLayer: sl, id }, { label: false });
+      }
+      prevLabeled[districtMapKey].clear();
+
+      // Set label=true for chosen, record state
+      for (const [dist, f] of chosen.entries()){
+        const id = f.id;
+        map.setFeatureState({ source, sourceLayer, id }, { label: true });
+        prevLabeled[districtMapKey].add(keyFor(sourceLayer, id));
+        labelState[districtMapKey].set(dist, { sourceLayer, id });
+      }
+    }
+
+    function refreshAllLabels(prop50Layer, y2020Layer){
+      dedupeLabelsFor('prop50', prop50Layer, 'prop50-line', 'prop50');
+      dedupeLabelsFor('y2020',  y2020Layer,  'y2020-line',  'y2020');
+    }
+
+    map.on('load', async ()=>{
+      const before=firstSymbolLayerId();
+      const [prop50Layer, y2020Layer, tractsLayer] = await Promise.all([
+        getFirstSourceLayerId(PROP50_TILESET_URL),
+        getFirstSourceLayerId(Y2020_TILESET_URL),
+        getFirstSourceLayerId(TRACTS_TILESET_URL)
+      ]);
+
+      map.addSource('prop50',{type:'vector',url:PROP50_TILESET_URL});
+      map.addSource('y2020', {type:'vector',url:Y2020_TILESET_URL});
+      map.addSource('tracts',{type:'vector',url:TRACTS_TILESET_URL});
+
+      // ---- TRACTS ----
+      map.addLayer({
+        id:'tracts-fill', type:'fill', source:'tracts', 'source-layer': tractsLayer,
+        filter: FILTER_TRACTS,
+        paint:{ 'fill-color': FILL_COLOR_EXPR, 'fill-opacity':.7 }
+      }, before);
+
+      map.addLayer({
+        id:'tracts-line', type:'line', source:'tracts', 'source-layer': tractsLayer,
+        filter: FILTER_TRACTS,
+        paint:{ 'line-color':'#777','line-width':['interpolate',['linear'],['zoom'],5,0.1,10,0.4],'line-opacity':0 }
+      }, before);
+
+      // ---- BORDERS ----
+      map.addLayer({
+        id:'prop50-line', type:'line', source:'prop50', 'source-layer': prop50Layer,
+        filter: ['all', ['==',['geometry-type'],'Polygon'], ['all', ['any', ['has','DISTRICT_N'], ['has','DISTRICT'], ['has','GEOID'], ['has','NAME']], ['!', ['any', ['has','votes_total'], ['has','votes_dem'], ['has','votes_rep']]] ]],
+        paint:{ 'line-color':'#ff8103','line-width':2.8,'line-opacity':1.0,'line-dasharray':[1,0] }
+      }, before);
+
+      map.addLayer({
+        id:'y2020-line', type:'line', source:'y2020', 'source-layer': y2020Layer,
+        filter: ['all', ['==',['geometry-type'],'Polygon'], ['all', ['any', ['has','DISTRICT_N'], ['has','DISTRICT'], ['has','GEOID'], ['has','NAME']], ['!', ['any', ['has','votes_total'], ['has','votes_dem'], ['has','votes_rep']]] ]],
+        paint:{ 'line-color':'#ff8103','line-width':1.0,'line-opacity':0.35,'line-dasharray':[2,2] }
+      }, before);
+
+      // ---- LABELS (feature-state gated) ----
+      // Only show features where feature-state {label:true}; prevents duplicates.
+      map.addLayer({
+        id:'prop50-label', type:'symbol', source:'prop50', 'source-layer': prop50Layer,
+        minzoom:7,
+        filter: ['all',
+          ['==',['feature-state','label'], true],
+          ['any', ['has','DISTRICT_N'], ['has','DISTRICT']]
+        ],
+        layout:{
+          'visibility':'visible','symbol-placement':'point',
+          'text-field':['concat','CA-', DIST_TEXT],
+          'text-font':['Open Sans Semibold','Arial Unicode MS Bold'],
+          'text-size':['interpolate',['linear'],['zoom'],7,12,9,16,12,20],
+          'text-allow-overlap': false,
+          'text-ignore-placement': false,
+          'text-variable-anchor': ['center'],
+          'text-justify':'center',
+          'symbol-avoid-edges': true
+        },
+        paint:{'text-color':'#111','text-halo-color':'#fff','text-halo-width':1.6}
+      });
+
+      map.addLayer({
+        id:'y2020-label', type:'symbol', source:'y2020', 'source-layer': y2020Layer,
+        minzoom:7,
+        filter: ['all',
+          ['==',['feature-state','label'], true],
+          ['any', ['has','DISTRICT_N'], ['has','DISTRICT']]
+        ],
+        layout:{
+          'visibility':'none','symbol-placement':'point',
+          'text-field':['concat','CA-', DIST_TEXT],
+          'text-font':['Open Sans Semibold','Arial Unicode MS Bold'],
+          'text-size':['interpolate',['linear'],['zoom'],7,12,9,16,12,20],
+          'text-allow-overlap': false,
+          'text-ignore-placement': false,
+          'text-variable-anchor': ['center'],
+          'text-justify':'center',
+          'symbol-avoid-edges': true
+        },
+        paint:{'text-color':'#111','text-halo-color':'#fff','text-halo-width':1.6}
+      });
+
+      // ---- Toggle (focused vs thinned/dashed) ----
+      let focus='prop50';
+      const btn=document.getElementById('btn-toggle');
+      const lgAB=document.getElementById('legend-ab604');
+      const lg20=document.getElementById('legend-2020');
+      const setVis=(id,vis)=>map.setLayoutProperty(id,'visibility',vis?'visible':'none');
+
+      function updateLegendForFocus(){
+        if(focus==='prop50'){ lgAB.classList.remove('legend-dim'); lg20.classList.add('legend-dim'); }
+        else{ lgAB.classList.add('legend-dim'); lg20.classList.remove('legend-dim'); }
+      }
+      function applyFocus(){
+        if(focus==='prop50'){
+          map.setPaintProperty('prop50-line','line-width',2.8);
+          map.setPaintProperty('prop50-line','line-opacity',1.0);
+          map.setPaintProperty('prop50-line','line-dasharray',[1,0]);
+          map.setPaintProperty('y2020-line','line-width',1.7);
+          map.setPaintProperty('y2020-line','line-opacity',0.6);
+          map.setPaintProperty('y2020-line','line-dasharray',[2,2]);
+          setVis('prop50-label',true);
+          setVis('y2020-label',false);
+        } else {
+          map.setPaintProperty('y2020-line','line-width',2.8);
+          map.setPaintProperty('y2020-line','line-opacity',1.0);
+          map.setPaintProperty('y2020-line','line-dasharray',[1,0]);
+          map.setPaintProperty('prop50-line','line-width',1.7);
+          map.setPaintProperty('prop50-line','line-opacity',0.6);
+          map.setPaintProperty('prop50-line','line-dasharray',[2,2]);
+          setVis('prop50-label',false);
+          setVis('y2020-label',true);
+        }
+        updateLegendForFocus();
+        // Recompute which single labels to show (in case visibility changed)
+        refreshAllLabels(prop50Layer, y2020Layer);
+      }
+      btn.addEventListener('click',()=>{ focus=(focus==='prop50')?'y2020':'prop50'; applyFocus(); });
+
+      // Recompute single-label selection when map view/zoom changes or tiles update
+      const recompute = ()=> refreshAllLabels(prop50Layer, y2020Layer);
+      map.on('idle', recompute);
+      map.on('moveend', recompute);
+      map.on('zoomend', recompute);
+      map.on('sourcedata', (e)=>{ if (e.isSourceLoaded && (e.sourceId==='prop50' || e.sourceId==='y2020')) recompute(); });
+
+      // Initial focus and initial label selection
+      applyFocus();
+      refreshAllLabels(prop50Layer, y2020Layer);
+    });
+  </script>
+</body>
+</html>
