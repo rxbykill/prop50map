@@ -158,11 +158,10 @@
       
       applyFocus();
 
-      // ---- Tooltip (Dem/Rep/Total)
+      // ---- TOOLTIP
       const popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
       const fmt = n => (n===null || n===undefined || isNaN(n)) ? '—' : Number(n).toLocaleString();
       const pct = (a,t) => (t>0) ? Math.round((a/t)*100) : 0;
-
       map.on('mousemove','tracts-fill',(e)=>{
         const f=e.features&&e.features[0]; if(!f){ popup.remove(); return; }
         const p=f.properties||{};
