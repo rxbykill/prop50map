@@ -136,7 +136,7 @@
       btn.addEventListener('click',()=>{ focus=(focus==='prop50')?'y2020':'prop50'; applyFocus(); });
       applyFocus();
 
-      // ---- Tooltip (Dem/Rep/Total) — FIXED: use a template string
+      // ---- Tooltip (Dem/Rep/Total)
       const popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
       const fmt = n => (n===null || n===undefined || isNaN(n)) ? '—' : Number(n).toLocaleString();
       const pct = (a,t) => (t>0) ? Math.round((a/t)*100) : 0;
@@ -147,15 +147,15 @@
         const demV=Number(p.votes_dem)||0;
         const repV=Number(p.votes_rep)||0;
         const totalV=Number(p.votes_total)||(demV+repV);
-        const winner=demV>repV?'Democrat':(repV>demV?'Republican':'Tie');
+        const winner=demV>repV?'<strong>Harris</strong>':(repV>demV?'<strong>Trump</strong>':'<strong>Tie</strong>');
 
         const html = `
-          <div style="font:13px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;min-width:220px;">
+          <div style="font:13px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;min-width:150px;">
             <div style="font-weight:600;margin-bottom:2px;">${winner}</div>
-            <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 10px;">
-              <div>Total votes</div><div><strong>${fmt(totalV)}</strong></div>
-              <div>Dem</div><div><strong>${fmt(demV)}</strong> (${pct(demV,totalV)}%)</div>
-              <div>Rep</div><div><strong>${fmt(repV)}</strong> (${pct(repV,totalV)}%)</div>
+            <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 5px;">
+              <div>Total votes:</div><div><strong>${fmt(totalV)}</strong></div>
+              <div>Harris:</div><div><strong>${fmt(demV)}</strong> (${pct(demV,totalV)}%)</div>
+              <div>Trump:</div><div><strong>${fmt(repV)}</strong> (${pct(repV,totalV)}%)</div>
             </div>
           </div>`;
 
